@@ -592,7 +592,14 @@
         let idx = 0, data = [];
         let recording = false, recognition = null, text = '';
         let isInCommandPhase = false;
-        let commandRecognition = null;
+
+        // --- Robust mic state machine ---
+        // recognitionActive mirrors the browser's real on/off state (set in onstart/onend).
+        // Because recognition.start()/stop() are asynchronous, we never call start()
+        // immediately after stop() — instead we queue the next action and let onend run it.
+        let recognitionActive = false;
+        let pendingAfterStop = null;   // function to run once the mic has fully stopped
+        let speechTimeout = null;
 
         // Initialize Speech Recognition
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -606,46 +613,47 @@
             recognition.continuous = true;
             recognition.interimResults = true;
             recognition.lang = 'en-IN';
-            
-            let speechTimeout;
-            let lastTranscriptTime = Date.now();
 
             recognition.onstart = () => {
+                recognitionActive = true;
                 recording = true;
-                lastTranscriptTime = Date.now();
-                
+
                 if (!isInCommandPhase) {
                     document.getElementById('voiceBtn').classList.add('active');
                     document.getElementById('voiceBtn').textContent = '🎤 Listening...';
                     document.getElementById('answerBox').classList.add('active');
-                    document.getElementById('answer').textContent = '🎤 Listening... Speak now! (Mic stays on for long answers)';
+                    document.getElementById('answer').textContent = (text ? text + ' ' : '') + '🎤 Listening... (mic stays on for long answers)';
                     document.getElementById('status').classList.add('active');
                     document.getElementById('status').textContent = 'Microphone is ON - Keep speaking';
-                    
-                    // Auto-stop after 3 seconds of silence
-                    clearTimeout(speechTimeout);
-                    speechTimeout = setTimeout(() => {
-                        if (recording && !isInCommandPhase && text.trim()) {
-                            recognition.stop();
-                        }
-                    }, 3000);
+                    armAnswerSilenceTimer();
                 }
             };
 
             recognition.onend = () => {
+                recognitionActive = false;
                 recording = false;
                 clearTimeout(speechTimeout);
-                
+
                 if (!isInCommandPhase) {
                     document.getElementById('voiceBtn').classList.remove('active');
                     document.getElementById('voiceBtn').textContent = '🎤 Start Answering';
                     document.getElementById('answerBox').classList.remove('active');
                     document.getElementById('status').classList.remove('active');
                     document.getElementById('status').textContent = '';
+                }
 
-                    if (text.trim()) {
-                        showCommandPhase();
-                    }
+                // Run whatever was queued to happen once the mic actually stopped.
+                if (pendingAfterStop) {
+                    const cb = pendingAfterStop;
+                    pendingAfterStop = null;
+                    cb();
+                    return;
+                }
+
+                // Default behavior: if we were recording an answer and it ended
+                // naturally (e.g. browser cut it off), move to the command phase.
+                if (!isInCommandPhase && text.trim()) {
+                    showCommandPhase();
                 }
             };
 
@@ -661,45 +669,33 @@
                     }
                 }
 
-                if (finalText) {
-                    if (isInCommandPhase) {
-                        // Command phase - process the command
+                if (isInCommandPhase) {
+                    if (finalText) {
                         const command = finalText.toLowerCase();
-                        clearTimeout(speechTimeout); // Clear timeout on command detection
-                        
-                        if (command.includes('next')) {
-                            recognition.stop();
-                            processCommand('next');
-                        } else if (command.includes('repeat')) {
-                            recognition.stop();
-                            processCommand('repeat');
-                        } else if (command.includes('record')) {
-                            recognition.stop();
-                            processCommand('record');
-                        } else {
-                            // Command not recognized, ask again
-                            recognition.stop();
-                            setTimeout(() => showCommandPhase(), 500);
-                        }
-                    } else {
-                        // Answer recording phase - keep accumulating text
-                        text += ' ' + finalText;
-                        text = text.trim();
-                        
-                        // Reset the silence timeout whenever new speech is detected
                         clearTimeout(speechTimeout);
-                        speechTimeout = setTimeout(() => {
-                            if (recording && !isInCommandPhase && text.trim()) {
-                                recognition.stop();
-                            }
-                        }, 3000);
+
+                        if (command.includes('next')) {
+                            stopRecognitionThen(() => processCommand('next'));
+                        } else if (command.includes('repeat')) {
+                            stopRecognitionThen(() => processCommand('repeat'));
+                        } else if (command.includes('record')) {
+                            stopRecognitionThen(() => processCommand('record'));
+                        } else {
+                            // Command not recognized — keep listening, don't restart the mic.
+                            armCommandSilenceTimer();
+                        }
                     }
+                    return;
                 }
 
-                if (!isInCommandPhase) {
-                    const display = (text + ' ' + interimText).trim();
-                    document.getElementById('answer').textContent = display || '🎤 Listening...';
+                // Answer recording phase - keep accumulating finalized text
+                if (finalText) {
+                    text = (text + ' ' + finalText).trim();
+                    armAnswerSilenceTimer();
                 }
+
+                const display = (text + ' ' + interimText).trim();
+                document.getElementById('answer').textContent = display || '🎤 Listening...';
             };
 
             recognition.onerror = (e) => {
@@ -710,10 +706,59 @@
                     'not-allowed': '⚠️ Microphone permission denied.',
                     'permission-denied': '⚠️ Microphone permission denied.'
                 };
-                if (!isInCommandPhase) {
+                if (!isInCommandPhase && e.error !== 'no-speech') {
                     document.getElementById('answer').textContent = msg[e.error] || '⚠️ Error: ' + e.error;
                 }
             };
+        }
+
+        // Restart the 3-second "student has gone quiet" timer for answer recording.
+        function armAnswerSilenceTimer() {
+            clearTimeout(speechTimeout);
+            speechTimeout = setTimeout(() => {
+                if (recognitionActive && !isInCommandPhase) {
+                    recognition.stop(); // onend -> showCommandPhase (via default behavior)
+                }
+            }, 3000);
+        }
+
+        // Restart the 5-second "no command heard" timer for the command phase.
+        function armCommandSilenceTimer() {
+            clearTimeout(speechTimeout);
+            speechTimeout = setTimeout(() => {
+                if (isInCommandPhase) {
+                    stopRecognitionThen(() => showCommandPhase());
+                }
+            }, 5000);
+        }
+
+        // Safely start the mic. If the browser reports it's already active
+        // (a stale state can happen right after a stop), just leave it running.
+        function safeStartRecognition() {
+            if (!recognition || recognitionActive) return;
+            try {
+                recognition.start();
+            } catch (e) {
+                console.error('Start error, retrying shortly:', e);
+                // The engine may still be tearing down the previous session — retry once.
+                setTimeout(() => {
+                    if (!recognitionActive) {
+                        try { recognition.start(); } catch (e2) { console.error('Retry start failed:', e2); }
+                    }
+                }, 350);
+            }
+        }
+
+        // Stop the mic (if running) and run `callback` only once it has
+        // genuinely stopped, avoiding start()/stop() race conditions.
+        function stopRecognitionThen(callback) {
+            if (!recognition) { callback(); return; }
+            if (recognitionActive) {
+                pendingAfterStop = callback;
+                recognition.stop();
+            } else {
+                callback();
+            }
         }
 
         function toggleKey() {
@@ -721,9 +766,10 @@
             k.type = k.type === 'password' ? 'text' : 'password';
         }
 
-        function speakMessage(msg) {
+        function speakMessage(msg, onEnd) {
             const u = new SpeechSynthesisUtterance(msg);
             u.rate = 0.9;
+            if (onEnd) u.onend = onEnd;
             speechSynthesis.speak(u);
         }
 
@@ -737,27 +783,14 @@
 
         function speakQuestion() {
             const q = filtered[idx].q;
-            const u = new SpeechSynthesisUtterance(q);
-            u.rate = 0.9;
-            u.onend = () => {
-                setTimeout(() => requestMicrophonePermission(), 500);
-            };
-            speechSynthesis.speak(u);
-        }
-
-        function requestMicrophonePermission() {
-            if (!recognition || isInCommandPhase) return;
-
-            document.getElementById('answer').textContent = '🎤 Requesting microphone access...';
-
-            try {
-                clearTimeout(speechTimeout);
-                lastTranscriptTime = Date.now();
-                recognition.start();
-            } catch (e) {
-                console.error('Permission request error:', e);
-                document.getElementById('answer').textContent = '🎤 Click "Start Answering" to begin speaking.';
-            }
+            speakMessage(q, () => {
+                // Question finished — make sure any previous session is fully
+                // stopped before starting fresh, then activate the mic.
+                stopRecognitionThen(() => {
+                    document.getElementById('answer').textContent = '🎤 Requesting microphone access...';
+                    safeStartRecognition();
+                });
+            });
         }
 
         function toggleVoice() {
@@ -766,117 +799,58 @@
                 return;
             }
 
-            if (recording) {
+            if (recognitionActive) {
                 recognition.stop();
             } else {
                 text = '';
-                clearTimeout(speechTimeout);
                 document.getElementById('answer').textContent = '🎤 Listening...';
                 document.getElementById('answerBox').classList.add('active');
-                try {
-                    lastTranscriptTime = Date.now();
-                    recognition.start();
-                } catch (e) {
-                    console.error('Start error:', e);
-                }
+                safeStartRecognition();
             }
         }
 
         function clearAnswer() {
-            text = '';
-            clearTimeout(speechTimeout);
-            document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
-            document.getElementById('answerBox').classList.add('active');
+            isInCommandPhase = false;
             document.getElementById('recordingPhase').classList.remove('hidden');
             document.getElementById('commandPhase').classList.add('hidden');
-            isInCommandPhase = false;
-            
-            if (recording) {
-                recognition.stop();
-            }
-            
-            speakMessage('Answer cleared. Speak now.');
-            setTimeout(() => {
-                if (recognition) {
-                    try {
-                        lastTranscriptTime = Date.now();
-                        recognition.start();
-                    } catch (e) {
-                        console.error('Start error:', e);
-                    }
-                }
-            }, 800);
+
+            stopRecognitionThen(() => {
+                text = '';
+                document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
+                document.getElementById('answerBox').classList.add('active');
+                speakMessage('Answer cleared. Speak now.', () => safeStartRecognition());
+            });
         }
 
         function showCommandPhase() {
             isInCommandPhase = true;
-            clearTimeout(speechTimeout);
             document.getElementById('recordingPhase').classList.add('hidden');
             document.getElementById('commandPhase').classList.remove('hidden');
-            
+
             const msg = 'What would you like to do? Say Next to move to the next question, Repeat to hear your answer again, or Record to record your answer again.';
-            const u = new SpeechSynthesisUtterance(msg);
-            u.rate = 0.9;
-            u.onend = () => {
-                // Auto-start listening for commands with timeout
-                if (recognition) {
-                    try {
-                        lastTranscriptTime = Date.now();
-                        recognition.start();
-                        
-                        // Auto-stop command listening after 5 seconds of silence
-                        speechTimeout = setTimeout(() => {
-                            if (isInCommandPhase) {
-                                recognition.stop();
-                                showCommandPhase(); // Ask again
-                            }
-                        }, 5000);
-                    } catch (e) {
-                        console.error('Start error:', e);
-                    }
-                }
-            };
-            speechSynthesis.speak(u);
+            speakMessage(msg, () => {
+                safeStartRecognition();
+                armCommandSilenceTimer();
+            });
         }
 
         function processCommand(cmd) {
             clearTimeout(speechTimeout);
-            
+
             if (cmd === 'next') {
-                speakMessage('Your answer accepted. Moving to the next question.');
-                setTimeout(() => {
-                    nextQuestion();
-                }, 1000);
+                speakMessage('Your answer accepted. Moving to the next question.', () => nextQuestion());
             } else if (cmd === 'repeat') {
-                clearTimeout(speechTimeout);
                 const msg = 'Your answer: ' + text;
-                const u = new SpeechSynthesisUtterance(msg);
-                u.rate = 0.9;
-                u.onend = () => {
-                    // After repeating, ask again what to do
-                    setTimeout(() => showCommandPhase(), 500);
-                };
-                speechSynthesis.speak(u);
+                speakMessage(msg, () => showCommandPhase());
             } else if (cmd === 'record') {
-                text = '';
-                clearTimeout(speechTimeout);
-                document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
-                document.getElementById('answerBox').classList.add('active');
+                isInCommandPhase = false;
                 document.getElementById('recordingPhase').classList.remove('hidden');
                 document.getElementById('commandPhase').classList.add('hidden');
-                isInCommandPhase = false;
-                
-                speakMessage('Speak your answer now.');
-                setTimeout(() => {
-                    if (recognition) {
-                        try {
-                            lastTranscriptTime = Date.now();
-                            recognition.start();
-                        } catch (e) {
-                            console.error('Start error:', e);
-                        }
-                    }
-                }, 800);
+
+                text = '';
+                document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
+                document.getElementById('answerBox').classList.add('active');
+                speakMessage('Speak your answer now.', () => safeStartRecognition());
             }
         }
 
@@ -889,13 +863,9 @@
             const q = filtered[idx];
             data.push({q: q.q, ch: q.ch, a: text.trim()});
             idx++;
-            
-            if (recording) {
-                recognition.stop();
-            }
-
             isInCommandPhase = false;
-            loadQuestion();
+
+            stopRecognitionThen(() => loadQuestion());
         }
 
         async function setup() {

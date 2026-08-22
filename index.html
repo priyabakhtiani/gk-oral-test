@@ -288,7 +288,7 @@
             line-height: 1.6;
         }
 
-        .confirmation-box {
+        .command-box {
             background: #e7f3ff;
             border: 2px solid var(--primary);
             padding: 20px;
@@ -297,11 +297,18 @@
             text-align: center;
         }
 
-        .confirmation-box p {
+        .command-box p {
             font-size: 16px;
             color: var(--dark);
             margin: 12px 0;
             font-weight: 500;
+        }
+
+        .command-box .listening {
+            font-size: 18px;
+            color: #f5576c;
+            font-weight: 700;
+            animation: pulse 1s infinite;
         }
 
         .button-group {
@@ -357,16 +364,16 @@
             50% { transform: scale(1.02); }
         }
 
-        .clear-button {
-            background: linear-gradient(135deg, #ff9800 0%, #ff7043 100%);
+        .next-button {
+            background: linear-gradient(135deg, var(--success) 0%, #1abc9c 100%);
         }
 
         .listen-button {
             background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
         }
 
-        .next-button {
-            background: linear-gradient(135deg, var(--success) 0%, #1abc9c 100%);
+        .record-button {
+            background: linear-gradient(135deg, #ff9800 0%, #ff7043 100%);
         }
 
         .secondary-button {
@@ -429,6 +436,14 @@
             .checkbox-group {
                 max-height: 250px;
             }
+        }
+
+        .fallback-text {
+            font-size: 12px;
+            color: #999;
+            text-align: center;
+            margin-top: 15px;
+            font-style: italic;
         }
     </style>
 </head>
@@ -526,8 +541,7 @@
                 <div class="answer-container">
                     <label class="answer-label">Your Answer</label>
                     <div class="instruction-box" id="instructionBox">
-                        🎙️ The question will be read to you. Your microphone will activate automatically.<br><br>
-                        <strong>Speak clearly</strong> to answer. If the microphone doesn't activate, click the <strong>"Start Answering"</strong> button.
+                        🎙️ The question will be read to you. Your microphone will activate automatically. Speak your answer clearly.
                     </div>
                     <div class="answer-box" id="answerBox">
                         <div class="answer-text" id="answer">🎙️ Waiting for question to be read...</div>
@@ -535,20 +549,22 @@
                     <div class="status-indicator" id="status"></div>
                 </div>
 
-                <div id="recordingButtons" class="button-group">
+                <div id="recordingPhase" class="button-group">
                     <button id="voiceBtn" onclick="toggleVoice()" class="mic-button">🎤 Start Answering</button>
-                    <button onclick="clearAnswer()" class="clear-button">🗑️ Clear</button>
+                    <button onclick="clearAnswer()" class="record-button">🗑️ Clear</button>
                 </div>
 
-                <div id="confirmationButtons" class="hidden">
-                    <div class="confirmation-box">
-                        <p id="confirmText">Your answer recorded. What would you like to do?</p>
+                <div id="commandPhase" class="hidden">
+                    <div class="command-box">
+                        <p>What would you like to do?</p>
+                        <p class="listening">🎤 Listening... Say: Next, Repeat, or Record</p>
                     </div>
                     <div class="button-group three-col">
-                        <button onclick="moveToNext()" class="next-button">➡️ Next</button>
-                        <button onclick="listenAnswer()" class="listen-button">👂 Repeat</button>
-                        <button onclick="rerecord()" class="clear-button">🔄 Re-record</button>
+                        <button onclick="processCommand('next')" class="next-button">➡️ Next</button>
+                        <button onclick="processCommand('repeat')" class="listen-button">👂 Repeat</button>
+                        <button onclick="processCommand('record')" class="record-button">🔄 Record</button>
                     </div>
+                    <div class="fallback-text">💡 If voice doesn't work, use buttons as fallback</div>
                 </div>
             </div>
         </div>
@@ -575,7 +591,8 @@
         let questions = [], topics = [], filtered = [];
         let idx = 0, data = [];
         let recording = false, recognition = null, text = '';
-        let isInConfirmation = false;
+        let isInCommandPhase = false;
+        let commandRecognition = null;
 
         // Initialize Speech Recognition
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -592,24 +609,28 @@
 
             recognition.onstart = () => {
                 recording = true;
-                document.getElementById('voiceBtn').classList.add('active');
-                document.getElementById('voiceBtn').textContent = '🎤 Listening...';
-                document.getElementById('answerBox').classList.add('active');
-                document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
-                document.getElementById('status').classList.add('active');
-                document.getElementById('status').textContent = 'Microphone is ON';
+                if (!isInCommandPhase) {
+                    document.getElementById('voiceBtn').classList.add('active');
+                    document.getElementById('voiceBtn').textContent = '🎤 Listening...';
+                    document.getElementById('answerBox').classList.add('active');
+                    document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
+                    document.getElementById('status').classList.add('active');
+                    document.getElementById('status').textContent = 'Microphone is ON';
+                }
             };
 
             recognition.onend = () => {
                 recording = false;
-                document.getElementById('voiceBtn').classList.remove('active');
-                document.getElementById('voiceBtn').textContent = '🎤 Start Answering';
-                document.getElementById('answerBox').classList.remove('active');
-                document.getElementById('status').classList.remove('active');
-                document.getElementById('status').textContent = '';
+                if (!isInCommandPhase) {
+                    document.getElementById('voiceBtn').classList.remove('active');
+                    document.getElementById('voiceBtn').textContent = '🎤 Start Answering';
+                    document.getElementById('answerBox').classList.remove('active');
+                    document.getElementById('status').classList.remove('active');
+                    document.getElementById('status').textContent = '';
 
-                if (text.trim() && !isInConfirmation) {
-                    showConfirmation();
+                    if (text.trim()) {
+                        showCommandPhase();
+                    }
                 }
             };
 
@@ -626,29 +647,48 @@
                 }
 
                 if (finalText) {
-                    text = finalText.trim();
+                    if (isInCommandPhase) {
+                        // Command phase - process the command
+                        const command = finalText.toLowerCase();
+                        if (command.includes('next')) {
+                            recognition.stop();
+                            processCommand('next');
+                        } else if (command.includes('repeat')) {
+                            recognition.stop();
+                            processCommand('repeat');
+                        } else if (command.includes('record')) {
+                            recognition.stop();
+                            processCommand('record');
+                        }
+                    } else {
+                        // Answer recording phase
+                        text = finalText.trim();
+                    }
                 }
 
-                const display = (text + ' ' + interimText).trim();
-                document.getElementById('answer').textContent = display || '🎤 Listening...';
+                if (!isInCommandPhase) {
+                    const display = (text + ' ' + interimText).trim();
+                    document.getElementById('answer').textContent = display || '🎤 Listening...';
+                }
             };
 
             recognition.onerror = (e) => {
                 console.error('Speech error:', e.error);
                 const msg = {
-                    'no-speech': '⚠️ No speech detected. Click "Start Answering" and try again.',
+                    'no-speech': '⚠️ No speech detected. Try again.',
                     'network': '⚠️ Network error. Check your internet connection.',
                     'not-allowed': '⚠️ Microphone permission denied.',
                     'permission-denied': '⚠️ Microphone permission denied.'
                 };
-                document.getElementById('answer').textContent = msg[e.error] || '⚠️ Error: ' + e.error;
+                if (!isInCommandPhase) {
+                    document.getElementById('answer').textContent = msg[e.error] || '⚠️ Error: ' + e.error;
+                }
             };
         }
 
         function toggleKey() {
             const k = document.getElementById('apiKey');
             k.type = k.type === 'password' ? 'text' : 'password';
-            speakMessage(k.type === 'password' ? 'API Key hidden' : 'API Key visible');
         }
 
         function speakMessage(msg) {
@@ -676,7 +716,7 @@
         }
 
         function requestMicrophonePermission() {
-            if (!recognition || isInConfirmation) return;
+            if (!recognition || isInCommandPhase) return;
 
             document.getElementById('answer').textContent = '🎤 Requesting microphone access...';
 
@@ -712,19 +752,36 @@
             text = '';
             document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
             document.getElementById('answerBox').classList.add('active');
-            document.getElementById('recordingButtons').classList.remove('hidden');
-            document.getElementById('confirmationButtons').classList.add('hidden');
-            isInConfirmation = false;
+            document.getElementById('recordingPhase').classList.remove('hidden');
+            document.getElementById('commandPhase').classList.add('hidden');
+            isInCommandPhase = false;
             
             if (recording) {
                 recognition.stop();
             }
             
-            const msg = 'Answer cleared. Speak now.';
+            speakMessage('Answer cleared. Speak now.');
+            setTimeout(() => {
+                if (recognition) {
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        console.error('Start error:', e);
+                    }
+                }
+            }, 800);
+        }
+
+        function showCommandPhase() {
+            isInCommandPhase = true;
+            document.getElementById('recordingPhase').classList.add('hidden');
+            document.getElementById('commandPhase').classList.remove('hidden');
+            
+            const msg = 'What would you like to do? Say Next to move to the next question, Repeat to hear your answer again, or Record to record your answer again.';
             const u = new SpeechSynthesisUtterance(msg);
             u.rate = 0.9;
             u.onend = () => {
-                // Auto-start mic after message
+                // Auto-start listening for commands
                 if (recognition) {
                     try {
                         recognition.start();
@@ -736,55 +793,40 @@
             speechSynthesis.speak(u);
         }
 
-        function showConfirmation() {
-            isInConfirmation = true;
-            document.getElementById('recordingButtons').classList.add('hidden');
-            document.getElementById('confirmationButtons').classList.remove('hidden');
-            document.getElementById('confirmText').textContent = 'Your answer recorded. What would you like to do?';
-        }
-
-        function moveToNext() {
-            const msg = 'Your answer accepted. Moving to the next question.';
-            const u = new SpeechSynthesisUtterance(msg);
-            u.rate = 0.9;
-            u.onend = () => {
-                nextQuestion();
-            };
-            speechSynthesis.speak(u);
-        }
-
-        function listenAnswer() {
-            // Read back the student's answer
-            const msg = 'Your answer: ' + text;
-            
-            const u = new SpeechSynthesisUtterance(msg);
-            u.rate = 0.9;
-            speechSynthesis.speak(u);
-        }
-
-        function rerecord() {
-            isInConfirmation = false;
-            document.getElementById('confirmationButtons').classList.add('hidden');
-            document.getElementById('recordingButtons').classList.remove('hidden');
-            
-            text = '';
-            document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
-            document.getElementById('answerBox').classList.add('active');
-            
-            const msg = 'Answer cleared. Speak now.';
-            const u = new SpeechSynthesisUtterance(msg);
-            u.rate = 0.9;
-            u.onend = () => {
-                // Auto-start mic after message
-                if (recognition) {
-                    try {
-                        recognition.start();
-                    } catch (e) {
-                        console.error('Start error:', e);
+        function processCommand(cmd) {
+            if (cmd === 'next') {
+                speakMessage('Your answer accepted. Moving to the next question.');
+                setTimeout(() => {
+                    nextQuestion();
+                }, 1000);
+            } else if (cmd === 'repeat') {
+                const msg = 'Your answer: ' + text;
+                const u = new SpeechSynthesisUtterance(msg);
+                u.rate = 0.9;
+                u.onend = () => {
+                    // After repeating, ask again what to do
+                    setTimeout(() => showCommandPhase(), 500);
+                };
+                speechSynthesis.speak(u);
+            } else if (cmd === 'record') {
+                text = '';
+                document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
+                document.getElementById('answerBox').classList.add('active');
+                document.getElementById('recordingPhase').classList.remove('hidden');
+                document.getElementById('commandPhase').classList.add('hidden');
+                isInCommandPhase = false;
+                
+                speakMessage('Speak your answer now.');
+                setTimeout(() => {
+                    if (recognition) {
+                        try {
+                            recognition.start();
+                        } catch (e) {
+                            console.error('Start error:', e);
+                        }
                     }
-                }
-            };
-            speechSynthesis.speak(u);
+                }, 800);
+            }
         }
 
         function nextQuestion() {
@@ -801,6 +843,7 @@
                 recognition.stop();
             }
 
+            isInCommandPhase = false;
             loadQuestion();
         }
 
@@ -927,9 +970,9 @@
             text = '';
             document.getElementById('answer').textContent = '🎙️ Reading question...';
             document.getElementById('answerBox').classList.remove('active');
-            document.getElementById('recordingButtons').classList.remove('hidden');
-            document.getElementById('confirmationButtons').classList.add('hidden');
-            isInConfirmation = false;
+            document.getElementById('recordingPhase').classList.remove('hidden');
+            document.getElementById('commandPhase').classList.add('hidden');
+            isInCommandPhase = false;
 
             setTimeout(() => speakQuestion(), 300);
         }

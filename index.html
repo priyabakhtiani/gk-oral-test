@@ -658,16 +658,21 @@
             };
 
             recognition.onresult = (e) => {
+                // With continuous=true, the browser sometimes re-sends results
+                // that were already finalized in an earlier event. Rebuilding
+                // from the full result list (not appending resultIndex-only
+                // slices) keeps this authoritative and avoids duplicated words.
                 let finalText = '';
                 let interimText = '';
 
-                for (let i = e.resultIndex; i < e.results.length; i++) {
+                for (let i = 0; i < e.results.length; i++) {
                     if (e.results[i].isFinal) {
                         finalText += e.results[i][0].transcript + ' ';
                     } else {
                         interimText += e.results[i][0].transcript;
                     }
                 }
+                finalText = finalText.trim();
 
                 if (isInCommandPhase) {
                     if (finalText) {
@@ -688,9 +693,9 @@
                     return;
                 }
 
-                // Answer recording phase - keep accumulating finalized text
+                // Answer recording phase - replace with the latest full transcript
                 if (finalText) {
-                    text = (text + ' ' + finalText).trim();
+                    text = finalText;
                     armAnswerSilenceTimer();
                 }
 

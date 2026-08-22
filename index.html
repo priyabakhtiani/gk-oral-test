@@ -288,6 +288,22 @@
             line-height: 1.6;
         }
 
+        .confirmation-box {
+            background: #e7f3ff;
+            border: 2px solid var(--primary);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 20px 0;
+            text-align: center;
+        }
+
+        .confirmation-box p {
+            font-size: 16px;
+            color: var(--dark);
+            margin: 12px 0;
+            font-weight: 500;
+        }
+
         .button-group {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -297,6 +313,16 @@
 
         .button-group.full {
             grid-template-columns: 1fr;
+        }
+
+        .button-group.three-col {
+            grid-template-columns: 1fr 1fr 1fr;
+        }
+
+        @media (max-width: 768px) {
+            .button-group.three-col {
+                grid-template-columns: 1fr;
+            }
         }
 
         @media (max-width: 576px) {
@@ -315,8 +341,6 @@
             font-size: 18px;
             font-weight: 700;
             letter-spacing: 0.5px;
-            position: relative;
-            overflow: hidden;
         }
 
         .mic-button:hover {
@@ -337,9 +361,12 @@
             background: linear-gradient(135deg, #ff9800 0%, #ff7043 100%);
         }
 
+        .listen-button {
+            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+        }
+
         .next-button {
             background: linear-gradient(135deg, var(--success) 0%, #1abc9c 100%);
-            grid-column: 1 / -1;
         }
 
         .secondary-button {
@@ -402,37 +429,6 @@
             .checkbox-group {
                 max-height: 250px;
             }
-        }
-
-        .error-message {
-            background: #f8d7da;
-            border: 2px solid var(--danger);
-            color: #721c24;
-            padding: 12px 16px;
-            border-radius: 6px;
-            margin: 15px 0;
-            font-size: 14px;
-        }
-
-        .loading {
-            text-align: center;
-            color: var(--primary);
-            font-weight: 600;
-        }
-
-        .loader {
-            border: 3px solid var(--light);
-            border-top: 3px solid var(--primary);
-            border-radius: 50%;
-            width: 30px;
-            height: 30px;
-            animation: spin 1s linear infinite;
-            margin: 20px auto;
-        }
-
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
         }
     </style>
 </head>
@@ -524,14 +520,14 @@
 
                 <div class="question-box">
                     <div class="question-text" id="question">Loading question...</div>
-                    <button onclick="speak()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); margin-top: 15px;">🔊 Read Question Again</button>
+                    <button onclick="speakQuestion()" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); margin-top: 15px;">🔊 Read Question Again</button>
                 </div>
 
                 <div class="answer-container">
                     <label class="answer-label">Your Answer</label>
                     <div class="instruction-box" id="instructionBox">
-                        🎙️ The question will be read to you. After the question finishes, your microphone will activate automatically.<br><br>
-                        <strong>Just speak clearly</strong> to answer. If the microphone doesn't activate, click the "Start Answering" button below.
+                        🎙️ The question will be read to you. Your microphone will activate automatically.<br><br>
+                        <strong>Speak clearly</strong> to answer. If the microphone doesn't activate, click the <strong>"Start Answering"</strong> button.
                     </div>
                     <div class="answer-box" id="answerBox">
                         <div class="answer-text" id="answer">🎙️ Waiting for question to be read...</div>
@@ -539,12 +535,20 @@
                     <div class="status-indicator" id="status"></div>
                 </div>
 
-                <div class="button-group">
+                <div id="recordingButtons" class="button-group">
                     <button id="voiceBtn" onclick="toggleVoice()" class="mic-button">🎤 Start Answering</button>
                     <button onclick="clearAnswer()" class="clear-button">🗑️ Clear</button>
                 </div>
-                <div class="button-group full">
-                    <button onclick="nextQuestion()" class="next-button">✓ Next Question</button>
+
+                <div id="confirmationButtons" class="hidden">
+                    <div class="confirmation-box">
+                        <p id="confirmText">Your answer recorded. What would you like to do?</p>
+                    </div>
+                    <div class="button-group three-col">
+                        <button onclick="moveToNext()" class="next-button">➡️ Next</button>
+                        <button onclick="listenAnswer()" class="listen-button">👂 Repeat</button>
+                        <button onclick="rerecord()" class="clear-button">🔄 Re-record</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -571,7 +575,7 @@
         let questions = [], topics = [], filtered = [];
         let idx = 0, data = [];
         let recording = false, recognition = null, text = '';
-        let micPermissionGranted = false;
+        let isInConfirmation = false;
 
         // Initialize Speech Recognition
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -604,8 +608,8 @@
                 document.getElementById('status').classList.remove('active');
                 document.getElementById('status').textContent = '';
 
-                if (!text.trim()) {
-                    document.getElementById('answer').textContent = '❌ No answer detected. Click "Start Answering" to try again.';
+                if (text.trim() && !isInConfirmation) {
+                    showConfirmation();
                 }
             };
 
@@ -644,6 +648,13 @@
         function toggleKey() {
             const k = document.getElementById('apiKey');
             k.type = k.type === 'password' ? 'text' : 'password';
+            speakMessage(k.type === 'password' ? 'API Key hidden' : 'API Key visible');
+        }
+
+        function speakMessage(msg) {
+            const u = new SpeechSynthesisUtterance(msg);
+            u.rate = 0.9;
+            speechSynthesis.speak(u);
         }
 
         function show(screen) {
@@ -652,6 +663,145 @@
             });
             document.getElementById(screen).classList.remove('hidden');
             window.scrollTo(0, 0);
+        }
+
+        function speakQuestion() {
+            const q = filtered[idx].q;
+            const u = new SpeechSynthesisUtterance(q);
+            u.rate = 0.9;
+            u.onend = () => {
+                setTimeout(() => requestMicrophonePermission(), 500);
+            };
+            speechSynthesis.speak(u);
+        }
+
+        function requestMicrophonePermission() {
+            if (!recognition || isInConfirmation) return;
+
+            document.getElementById('answer').textContent = '🎤 Requesting microphone access...';
+
+            try {
+                recognition.start();
+            } catch (e) {
+                console.error('Permission request error:', e);
+                document.getElementById('answer').textContent = '🎤 Click "Start Answering" to begin speaking.';
+            }
+        }
+
+        function toggleVoice() {
+            if (!recognition) {
+                alert('Speech Recognition not supported');
+                return;
+            }
+
+            if (recording) {
+                recognition.stop();
+            } else {
+                text = '';
+                document.getElementById('answer').textContent = '🎤 Listening...';
+                document.getElementById('answerBox').classList.add('active');
+                try {
+                    recognition.start();
+                } catch (e) {
+                    console.error('Start error:', e);
+                }
+            }
+        }
+
+        function clearAnswer() {
+            text = '';
+            document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
+            document.getElementById('answerBox').classList.add('active');
+            document.getElementById('recordingButtons').classList.remove('hidden');
+            document.getElementById('confirmationButtons').classList.add('hidden');
+            isInConfirmation = false;
+            
+            if (recording) {
+                recognition.stop();
+            }
+            
+            const msg = 'Answer cleared. Speak now.';
+            const u = new SpeechSynthesisUtterance(msg);
+            u.rate = 0.9;
+            u.onend = () => {
+                // Auto-start mic after message
+                if (recognition) {
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        console.error('Start error:', e);
+                    }
+                }
+            };
+            speechSynthesis.speak(u);
+        }
+
+        function showConfirmation() {
+            isInConfirmation = true;
+            document.getElementById('recordingButtons').classList.add('hidden');
+            document.getElementById('confirmationButtons').classList.remove('hidden');
+            document.getElementById('confirmText').textContent = 'Your answer recorded. What would you like to do?';
+        }
+
+        function moveToNext() {
+            const msg = 'Your answer accepted. Moving to the next question.';
+            const u = new SpeechSynthesisUtterance(msg);
+            u.rate = 0.9;
+            u.onend = () => {
+                nextQuestion();
+            };
+            speechSynthesis.speak(u);
+        }
+
+        function listenAnswer() {
+            // Read back the student's answer
+            const msg = 'Your answer: ' + text;
+            
+            const u = new SpeechSynthesisUtterance(msg);
+            u.rate = 0.9;
+            speechSynthesis.speak(u);
+        }
+
+        function rerecord() {
+            isInConfirmation = false;
+            document.getElementById('confirmationButtons').classList.add('hidden');
+            document.getElementById('recordingButtons').classList.remove('hidden');
+            
+            text = '';
+            document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
+            document.getElementById('answerBox').classList.add('active');
+            
+            const msg = 'Answer cleared. Speak now.';
+            const u = new SpeechSynthesisUtterance(msg);
+            u.rate = 0.9;
+            u.onend = () => {
+                // Auto-start mic after message
+                if (recognition) {
+                    try {
+                        recognition.start();
+                    } catch (e) {
+                        console.error('Start error:', e);
+                    }
+                }
+            };
+            speechSynthesis.speak(u);
+        }
+
+        function nextQuestion() {
+            if (!text || text.trim() === '') {
+                alert('❌ Please provide an answer');
+                return;
+            }
+
+            const q = filtered[idx];
+            data.push({q: q.q, ch: q.ch, a: text.trim()});
+            idx++;
+            
+            if (recording) {
+                recognition.stop();
+            }
+
+            loadQuestion();
         }
 
         async function setup() {
@@ -709,7 +859,7 @@
                 topics = Array.from(ch);
                 show('studentScreen');
                 loadTopics();
-                alert('✅ Questions loaded successfully!\n\nShare this link with your students.');
+                speakMessage('Questions loaded successfully. Share this link with your students.');
             } catch (e) {
                 alert('❌ Error: ' + e.message);
             }
@@ -777,92 +927,25 @@
             text = '';
             document.getElementById('answer').textContent = '🎙️ Reading question...';
             document.getElementById('answerBox').classList.remove('active');
-            micPermissionGranted = false;
+            document.getElementById('recordingButtons').classList.remove('hidden');
+            document.getElementById('confirmationButtons').classList.add('hidden');
+            isInConfirmation = false;
 
-            // Read question and then request mic
-            setTimeout(() => speak(), 300);
-        }
-
-        function speak() {
-            const q = filtered[idx];
-            const u = new SpeechSynthesisUtterance(q.q);
-            u.rate = 0.9;
-            u.onend = () => {
-                // Question finished, now request mic permission
-                setTimeout(() => requestMicrophonePermission(), 500);
-            };
-            speechSynthesis.speak(u);
-        }
-
-        function requestMicrophonePermission() {
-            if (!recognition) {
-                document.getElementById('answer').textContent = '❌ Speech not supported. Click "Start Answering" to begin.';
-                return;
-            }
-
-            document.getElementById('answer').textContent = '🎤 Requesting microphone access...';
-
-            // Try to start recognition to trigger permission dialog
-            try {
-                recognition.start();
-                micPermissionGranted = true;
-            } catch (e) {
-                console.error('Permission request error:', e);
-                document.getElementById('answer').textContent = '🎤 Click "Start Answering" to begin speaking.';
-            }
-        }
-
-        function toggleVoice() {
-            if (!recognition) {
-                alert('Speech Recognition not supported');
-                return;
-            }
-
-            if (recording) {
-                recognition.stop();
-            } else {
-                text = '';
-                document.getElementById('answer').textContent = '🎤 Listening...';
-                document.getElementById('answerBox').classList.add('active');
-                try {
-                    recognition.start();
-                } catch (e) {
-                    console.error('Start error:', e);
-                }
-            }
-        }
-
-        function clearAnswer() {
-            text = '';
-            document.getElementById('answer').textContent = '🎤 Click "Start Answering" to record your answer.';
-            document.getElementById('answerBox').classList.remove('active');
-            if (recording) {
-                recognition.stop();
-            }
-        }
-
-        function nextQuestion() {
-            if (!text || text.trim() === '') {
-                alert('❌ Please provide an answer');
-                return;
-            }
-
-            const q = filtered[idx];
-            data.push({q: q.q, ch: q.ch, a: text.trim()});
-            idx++;
-            
-            if (recording) {
-                recognition.stop();
-            }
-
-            loadQuestion();
+            setTimeout(() => speakQuestion(), 300);
         }
 
         function submitTest() {
             document.getElementById('resultName').textContent = window.name;
             document.getElementById('resultCount').textContent = data.length;
-            saveToSheet();
-            show('resultsScreen');
+            
+            const msg = 'All questions completed. Saving your results.';
+            const u = new SpeechSynthesisUtterance(msg);
+            u.rate = 0.9;
+            u.onend = () => {
+                saveToSheet();
+                show('resultsScreen');
+            };
+            speechSynthesis.speak(u);
         }
 
         async function saveToSheet() {

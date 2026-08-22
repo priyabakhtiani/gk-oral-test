@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>G.K. Classes - Oral Test</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+        .container { width: 100%; max-width: 700px; background: white; border-radius: 20px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); overflow: hidden; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 30px 20px; text-align: center; }
+        .header h1 { font-size: 28px; margin-bottom: 5px; }
+        .content { padding: 30px; }
+        .form-group { margin-bottom: 20px; }
+        label { display: block; font-weight: 600; margin-bottom: 8px; color: #333; font-size: 14px; }
+        input, select, textarea { width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-size: 16px; font-family: inherit; }
+        input:focus, select:focus, textarea:focus { outline: none; border-color: #667eea; box-shadow: 0 0 0 3px rgba(102,126,234,0.1); }
+        button { width: 100%; padding: 14px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 10px; transition: all 0.3s; }
+        button:hover { transform: translateY(-2px); box-shadow: 0 10px 20px rgba(102,126,234,0.3); }
+        .info { background: #f5f5f5; padding: 15px; border-radius: 8px; margin-bottom: 20px; border-left: 4px solid #667eea; }
+        .info p { color: #666; font-size: 13px; line-height: 1.6; margin: 5px 0; }
+        .success-box { background: #d4edda; border: 2px solid #28a745; color: #155724; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        .question-box { background: #f0f4ff; padding: 20px; border-radius: 8px; margin-bottom: 20px; border: 2px solid #667eea; }
+        .question-text { font-size: 18px; font-weight: 600; color: #333; margin-bottom: 10px; line-height: 1.6; min-height: 60px; }
+        .progress-bar { height: 8px; background: #e0e0e0; border-radius: 4px; overflow: hidden; margin-bottom: 20px; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #667eea 0%, #764ba2 100%); transition: width 0.3s; }
+        .answer-box { background: #f9f9f9; padding: 15px; border-radius: 8px; margin: 20px 0; border: 2px solid #e0e0e0; min-height: 60px; }
+        textarea { resize: vertical; min-height: 100px; }
+        .button-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px; }
+        .button-group button { margin-top: 0; }
+        .button-group.full { grid-column: 1 / -1; }
+        .mic-button { background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%); }
+        .mic-button.active { background: linear-gradient(135deg, #fa709a 0%, #fee140 100%); animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
+        .hidden { display: none; }
+        .chapter-checkbox { margin: 10px 0; }
+        .chapter-checkbox input { margin-right: 8px; width: auto; }
+        .checkbox-group { border: 1px solid #e0e0e0; border-radius: 8px; padding: 15px; max-height: 250px; overflow-y: auto; background: #fafafa; }
+        .btn-secondary { background: #999; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- TEACHER SETUP -->
+        <div id="teacherScreen">
+            <div class="header">
+                <h1>📚 Teacher Setup</h1>
+            </div>
+            <div class="content">
+                <div class="info">
+                    <p><strong>Step 1:</strong> Enter your Google API Key</p>
+                    <p><strong>Step 2:</strong> Enter your Google Sheet ID</p>
+                    <p><strong>Step 3:</strong> Enter Google Apps Script URL</p>
+                    <p><strong>Step 4:</strong> Click "Load & Setup"</p>
+                </div>
+                <div class="form-group">
+                    <label>Google API Key</label>
+                    <input type="password" id="apiKey" placeholder="AIzaSyD...">
+                </div>
+                <div class="form-group">
+                    <label>Google Sheet ID</label>
+                    <input type="text" id="sheetId" placeholder="1yqGOjlk_N5rjx4...">
+                </div>
+                <div class="form-group">
+                    <label>Google Apps Script URL</label>
+                    <input type="text" id="scriptUrl" placeholder="https://script.googleapis.com/macros/d/...">
+                </div>
+                <button onclick="setup()">✅ Load & Setup</button>
+                <button class="btn-secondary" onclick="toggleKey()">🔓 Show/Hide</button>
+            </div>
+        </div>
+
+        <!-- STUDENT DETAILS -->
+        <div id="studentScreen" class="hidden">
+            <div class="header">
+                <h1>👤 Your Details</h1>
+            </div>
+            <div class="content">
+                <div class="form-group">
+                    <label>Name</label>
+                    <input type="text" id="studentName" placeholder="Your name">
+                </div>
+                <div class="form-group">
+                    <label>Class</label>
+                    <select id="studentClass">
+                        <option value="">Select</option>
+                        <option value="9th">9th</option>
+                        <option value="10th">10th</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Roll Number</label>
+                    <input type="text" id="studentRoll" placeholder="15">
+                </div>
+                <div class="form-group">
+                    <label>Select Topics</label>
+                    <div class="checkbox-group" id="topicsList"></div>
+                </div>
+                <button onclick="startTest()">Start Test</button>
+            </div>
+        </div>
+
+        <!-- TEST -->
+        <div id="testScreen" class="hidden">
+            <div class="header">
+                <h1 id="deviceType">🎤 Oral Test</h1>
+                <p id="questionNum">Q1/10</p>
+            </div>
+            <div class="content">
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progress"></div>
+                </div>
+                <div class="question-box">
+                    <div class="question-text" id="question">Loading...</div>
+                    <button onclick="speak()" style="background: #667eea; margin-top: 10px;">🔊 Read Question</button>
+                </div>
+                <label id="answerLabel">Your Answer</label>
+                <div id="answerContainer"></div>
+                <div class="button-group">
+                    <button id="voiceBtn" onclick="toggleVoice()" class="mic-button" style="display:none;">🎤 Record</button>
+                    <button onclick="clear()">🗑️ Clear</button>
+                </div>
+                <div class="button-group full">
+                    <button onclick="next()" style="background: #28a745;">✓ Next</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- RESULTS -->
+        <div id="resultsScreen" class="hidden">
+            <div class="header">
+                <h1>🎉 Done!</h1>
+            </div>
+            <div class="content">
+                <div class="success-box">
+                    <h2 id="resName">Name</h2>
+                    <p>Questions: <span id="resCount">0</span></p>
+                    <p id="resSaved">✓ Saving...</p>
+                </div>
+                <button onclick="location.reload()">Take Another Test</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let API_KEY = '', SHEET_ID = '', SCRIPT_URL = '';
+        let questions = [], topics = [], filtered = [];
+        let idx = 0, data = [];
+        let recording = false, recognition = null, text = '';
+        let isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+        let hasVoice = (window.SpeechRecognition || window.webkitSpeechRecognition) && !isMobile;
+
+        if (hasVoice) {
+            const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+            recognition = new SR();
+            recognition.continuous = false;
+            recognition.interimResults = true;
+            recognition.lang = 'en-IN';
+            recognition.onstart = () => {
+                recording = true;
+                document.getElementById('voiceBtn').classList.add('active');
+                document.getElementById('voiceBtn').textContent = '🎤 Listening...';
+            };
+            recognition.onend = () => {
+                recording = false;
+                document.getElementById('voiceBtn').classList.remove('active');
+                document.getElementById('voiceBtn').textContent = '🎤 Record';
+            };
+            recognition.onresult = (e) => {
+                let final = '';
+                for (let i = e.resultIndex; i < e.results.length; i++) {
+                    if (e.results[i].isFinal) final += e.results[i][0].transcript + ' ';
+                }
+                if (final) text = final.trim();
+                document.getElementById('answer').textContent = text || 'Listening...';
+            };
+        }
+
+        function toggleKey() {
+            const k = document.getElementById('apiKey');
+            k.type = k.type === 'password' ? 'text' : 'password';
+        }
+
+        function show(screen) {
+            ['teacherScreen', 'studentScreen', 'testScreen', 'resultsScreen'].forEach(s => {
+                document.getElementById(s).classList.add('hidden');
+            });
+            document.getElementById(screen).classList.remove('hidden');
+        }
+
+        async function setup() {
+            API_KEY = document.getElementById('apiKey').value.trim();
+            SHEET_ID = document.getElementById('sheetId').value.trim();
+            SCRIPT_URL = document.getElementById('scriptUrl').value.trim();
+
+            if (!API_KEY || !SHEET_ID || !SCRIPT_URL) {
+                alert('Enter all fields');
+                return;
+            }
+
+            try {
+                const r = await fetch('https://sheets.googleapis.com/v4/spreadsheets/' + SHEET_ID + '?key=' + API_KEY + '&includeGridData=true');
+                const d = await r.json();
+                if (d.error) throw new Error(d.error.message);
+
+                questions = [];
+                const ch = new Set();
+
+                d.sheets.forEach(s => {
+                    const vals = s.data[0]?.rowData || [];
+                    if (vals.length > 1) {
+                        const hA = vals[0]?.values?.[0]?.userEnteredValue?.stringValue || '';
+                        const hB = vals[0]?.values?.[1]?.userEnteredValue?.stringValue || '';
+                        if (hA === 'Chapter' && hB === 'Question') {
+                            vals.forEach((r, i) => {
+                                if (i === 0) return;
+                                const c = r.values?.[0]?.userEnteredValue?.stringValue || '';
+                                const q = r.values?.[1]?.userEnteredValue?.stringValue || '';
+                                if (c && q) {
+                                    ch.add(c);
+                                    questions.push({ch: c, q: q});
+                                }
+                            });
+                        }
+                    }
+                });
+
+                if (questions.length === 0) {
+                    d.sheets.forEach(s => {
+                        const t = s.properties.title;
+                        if (t !== 'Results' && t !== 'Config') {
+                            ch.add(t);
+                            const vals = s.data[0]?.rowData || [];
+                            vals.forEach((r, i) => {
+                                if (i === 0) return;
+                                const q = r.values?.[0]?.userEnteredValue?.stringValue || '';
+                                if (q) questions.push({ch: t, q: q});
+                            });
+                        }
+                    });
+                }
+
+                topics = Array.from(ch);
+                show('studentScreen');
+                loadTopics();
+                alert('✅ Loaded! Share this file with students.');
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        function loadTopics() {
+            const c = document.getElementById('topicsList');
+            c.innerHTML = '';
+            topics.forEach(t => {
+                const l = document.createElement('label');
+                l.className = 'chapter-checkbox';
+                l.innerHTML = '<input type="checkbox" value="' + t + '" checked> ' + t;
+                c.appendChild(l);
+            });
+        }
+
+        function startTest() {
+            const n = document.getElementById('studentName').value.trim();
+            const cl = document.getElementById('studentClass').value;
+            const r = document.getElementById('studentRoll').value.trim();
+
+            if (!n || !cl || !r) {
+                alert('Fill all fields');
+                return;
+            }
+
+            const sel = Array.from(document.querySelectorAll('.chapter-checkbox input:checked'));
+            topics = sel.map(x => x.value);
+
+            if (topics.length === 0) {
+                alert('Select topics');
+                return;
+            }
+
+            filtered = questions.filter(q => topics.includes(q.ch));
+            idx = 0;
+            data = [];
+            window.name = n;
+            window.cls = cl;
+            window.roll = r;
+
+            show('testScreen');
+            setupAnswer();
+            loadQ();
+        }
+
+        function setupAnswer() {
+            const c = document.getElementById('answerContainer');
+            if (hasVoice) {
+                c.innerHTML = '<div class="answer-box"><div id="answer">Click "Record" and speak...</div></div>';
+                document.getElementById('voiceBtn').style.display = 'block';
+                document.getElementById('answerLabel').textContent = 'Speak Your Answer';
+            } else {
+                c.innerHTML = '<textarea id="answer" placeholder="Type your answer..."></textarea>';
+                document.getElementById('voiceBtn').style.display = 'none';
+                document.getElementById('answerLabel').textContent = 'Type Your Answer';
+            }
+        }
+
+        function loadQ() {
+            if (idx >= filtered.length) {
+                submit();
+                return;
+            }
+            const q = filtered[idx];
+            document.getElementById('question').textContent = q.q;
+            document.getElementById('questionNum').textContent = 'Q' + (idx + 1) + '/' + filtered.length;
+            document.getElementById('progress').style.width = ((idx + 1) / filtered.length * 100) + '%';
+            text = '';
+            const a = document.getElementById('answer');
+            if (a.tagName === 'TEXTAREA') {
+                a.value = '';
+            } else {
+                a.textContent = 'Click "Record" and speak...';
+            }
+            speak();
+        }
+
+        function speak() {
+            const q = filtered[idx];
+            const u = new SpeechSynthesisUtterance(q.q);
+            u.rate = 0.9;
+            speechSynthesis.speak(u);
+        }
+
+        function toggleVoice() {
+            if (!recognition) return;
+            if (recording) {
+                recognition.stop();
+            } else {
+                text = '';
+                recognition.start();
+            }
+        }
+
+        function clear() {
+            text = '';
+            const a = document.getElementById('answer');
+            if (a.tagName === 'TEXTAREA') {
+                a.value = '';
+            } else {
+                a.textContent = 'Click "Record" and speak...';
+            }
+        }
+
+        function next() {
+            const a = document.getElementById('answer');
+            let ans = '';
+            if (a.tagName === 'TEXTAREA') {
+                ans = a.value.trim();
+            } else {
+                ans = text.trim();
+            }
+
+            if (!ans) {
+                alert('Provide answer');
+                return;
+            }
+
+            const q = filtered[idx];
+            data.push({q: q.q, ch: q.ch, a: ans});
+            idx++;
+            loadQ();
+        }
+
+        function submit() {
+            document.getElementById('resName').textContent = window.name;
+            document.getElementById('resCount').textContent = data.length;
+            save();
+            show('resultsScreen');
+        }
+
+        async function save() {
+            try {
+                const ts = new Date().toLocaleString();
+                const qtext = data.map((x, i) => 'Q' + (i+1) + ': ' + x.q + '\nA: ' + x.a).join('\n---\n');
+                const payload = {
+                    timestamp: ts,
+                    name: window.name,
+                    class: window.cls,
+                    roll: window.roll,
+                    count: data.length,
+                    topics: topics.join(', '),
+                    responses: qtext,
+                    sheetId: SHEET_ID
+                };
+
+                const r = await fetch(SCRIPT_URL, {
+                    method: 'POST',
+                    body: JSON.stringify(payload)
+                });
+
+                const res = await r.json();
+                document.getElementById('resSaved').textContent = res.success ? '✓ Saved!' : '✓ Done';
+            } catch (e) {
+                document.getElementById('resSaved').textContent = '✓ Done';
+            }
+        }
+
+        window.addEventListener('load', () => {
+            if (API_KEY && SHEET_ID && SCRIPT_URL) {
+                show('studentScreen');
+            } else {
+                show('teacherScreen');
+            }
+            document.getElementById('deviceType').textContent = hasVoice ? '🎤 Oral Test' : '📝 Written Test';
+        });
+    </script>
+</body>
+</html>

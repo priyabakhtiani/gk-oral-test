@@ -541,7 +541,7 @@
                 <div class="answer-container">
                     <label class="answer-label">Your Answer</label>
                     <div class="instruction-box" id="instructionBox">
-                        🎙️ The question will be read to you. Your microphone will activate automatically. Speak your answer clearly.
+                        🎙️ The question will be read to you. Your microphone will activate automatically. <strong>Speak your complete answer clearly - the mic stays on for long answers!</strong> It will stop after 3 seconds of silence.
                     </div>
                     <div class="answer-box" id="answerBox">
                         <div class="answer-text" id="answer">🎙️ Waiting for question to be read...</div>
@@ -603,24 +603,39 @@
 
         if (SR) {
             recognition = new SR();
-            recognition.continuous = false;
+            recognition.continuous = true;
             recognition.interimResults = true;
             recognition.lang = 'en-IN';
+            
+            let speechTimeout;
+            let lastTranscriptTime = Date.now();
 
             recognition.onstart = () => {
                 recording = true;
+                lastTranscriptTime = Date.now();
+                
                 if (!isInCommandPhase) {
                     document.getElementById('voiceBtn').classList.add('active');
                     document.getElementById('voiceBtn').textContent = '🎤 Listening...';
                     document.getElementById('answerBox').classList.add('active');
-                    document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
+                    document.getElementById('answer').textContent = '🎤 Listening... Speak now! (Mic stays on for long answers)';
                     document.getElementById('status').classList.add('active');
-                    document.getElementById('status').textContent = 'Microphone is ON';
+                    document.getElementById('status').textContent = 'Microphone is ON - Keep speaking';
+                    
+                    // Auto-stop after 3 seconds of silence
+                    clearTimeout(speechTimeout);
+                    speechTimeout = setTimeout(() => {
+                        if (recording && !isInCommandPhase && text.trim()) {
+                            recognition.stop();
+                        }
+                    }, 3000);
                 }
             };
 
             recognition.onend = () => {
                 recording = false;
+                clearTimeout(speechTimeout);
+                
                 if (!isInCommandPhase) {
                     document.getElementById('voiceBtn').classList.remove('active');
                     document.getElementById('voiceBtn').textContent = '🎤 Start Answering';
@@ -650,6 +665,8 @@
                     if (isInCommandPhase) {
                         // Command phase - process the command
                         const command = finalText.toLowerCase();
+                        clearTimeout(speechTimeout); // Clear timeout on command detection
+                        
                         if (command.includes('next')) {
                             recognition.stop();
                             processCommand('next');
@@ -659,10 +676,23 @@
                         } else if (command.includes('record')) {
                             recognition.stop();
                             processCommand('record');
+                        } else {
+                            // Command not recognized, ask again
+                            recognition.stop();
+                            setTimeout(() => showCommandPhase(), 500);
                         }
                     } else {
-                        // Answer recording phase
-                        text = finalText.trim();
+                        // Answer recording phase - keep accumulating text
+                        text += ' ' + finalText;
+                        text = text.trim();
+                        
+                        // Reset the silence timeout whenever new speech is detected
+                        clearTimeout(speechTimeout);
+                        speechTimeout = setTimeout(() => {
+                            if (recording && !isInCommandPhase && text.trim()) {
+                                recognition.stop();
+                            }
+                        }, 3000);
                     }
                 }
 
@@ -721,6 +751,8 @@
             document.getElementById('answer').textContent = '🎤 Requesting microphone access...';
 
             try {
+                clearTimeout(speechTimeout);
+                lastTranscriptTime = Date.now();
                 recognition.start();
             } catch (e) {
                 console.error('Permission request error:', e);
@@ -738,9 +770,11 @@
                 recognition.stop();
             } else {
                 text = '';
+                clearTimeout(speechTimeout);
                 document.getElementById('answer').textContent = '🎤 Listening...';
                 document.getElementById('answerBox').classList.add('active');
                 try {
+                    lastTranscriptTime = Date.now();
                     recognition.start();
                 } catch (e) {
                     console.error('Start error:', e);
@@ -750,6 +784,7 @@
 
         function clearAnswer() {
             text = '';
+            clearTimeout(speechTimeout);
             document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
             document.getElementById('answerBox').classList.add('active');
             document.getElementById('recordingPhase').classList.remove('hidden');
@@ -764,6 +799,7 @@
             setTimeout(() => {
                 if (recognition) {
                     try {
+                        lastTranscriptTime = Date.now();
                         recognition.start();
                     } catch (e) {
                         console.error('Start error:', e);
@@ -774,6 +810,7 @@
 
         function showCommandPhase() {
             isInCommandPhase = true;
+            clearTimeout(speechTimeout);
             document.getElementById('recordingPhase').classList.add('hidden');
             document.getElementById('commandPhase').classList.remove('hidden');
             
@@ -781,10 +818,19 @@
             const u = new SpeechSynthesisUtterance(msg);
             u.rate = 0.9;
             u.onend = () => {
-                // Auto-start listening for commands
+                // Auto-start listening for commands with timeout
                 if (recognition) {
                     try {
+                        lastTranscriptTime = Date.now();
                         recognition.start();
+                        
+                        // Auto-stop command listening after 5 seconds of silence
+                        speechTimeout = setTimeout(() => {
+                            if (isInCommandPhase) {
+                                recognition.stop();
+                                showCommandPhase(); // Ask again
+                            }
+                        }, 5000);
                     } catch (e) {
                         console.error('Start error:', e);
                     }
@@ -794,12 +840,15 @@
         }
 
         function processCommand(cmd) {
+            clearTimeout(speechTimeout);
+            
             if (cmd === 'next') {
                 speakMessage('Your answer accepted. Moving to the next question.');
                 setTimeout(() => {
                     nextQuestion();
                 }, 1000);
             } else if (cmd === 'repeat') {
+                clearTimeout(speechTimeout);
                 const msg = 'Your answer: ' + text;
                 const u = new SpeechSynthesisUtterance(msg);
                 u.rate = 0.9;
@@ -810,6 +859,7 @@
                 speechSynthesis.speak(u);
             } else if (cmd === 'record') {
                 text = '';
+                clearTimeout(speechTimeout);
                 document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
                 document.getElementById('answerBox').classList.add('active');
                 document.getElementById('recordingPhase').classList.remove('hidden');
@@ -820,6 +870,7 @@
                 setTimeout(() => {
                     if (recognition) {
                         try {
+                            lastTranscriptTime = Date.now();
                             recognition.start();
                         } catch (e) {
                             console.error('Start error:', e);

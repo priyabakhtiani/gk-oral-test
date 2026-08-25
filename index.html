@@ -461,7 +461,9 @@
                     1️⃣ Enter your Google API Key<br>
                     2️⃣ Enter your Google Sheet ID<br>
                     3️⃣ Enter Google Apps Script URL<br>
-                    4️⃣ Click "Load & Setup"
+                    4️⃣ Click "Load & Setup"<br><br>
+                    <strong>📝 Sheet columns:</strong> Chapter | Question | Answer <em>(optional)</em><br>
+                    If you fill in the <strong>Answer</strong> column with a model answer for a question, the app will auto-score that question (1 mark) by checking how many key words from your answer appear in the student's spoken answer. Questions left without an Answer are saved but not auto-graded.
                 </div>
 
                 <div class="form-group">
@@ -579,7 +581,9 @@
                 <div class="success-box">
                     <h2 id="resultName">Student Name</h2>
                     <p>Questions Answered: <span id="resultCount">0</span></p>
+                    <p id="resultScoreRow" class="hidden">Score: <strong id="resultScore">-</strong></p>
                     <p id="resultMsg">📊 Saving your results...</p>
+                    <p id="resultUngradedNote" class="hidden" style="font-size: 13px; color: #856404;"></p>
                 </div>
                 <button onclick="location.reload()">Take Another Test</button>
             </div>
@@ -591,15 +595,25 @@
         let questions = [], topics = [], filtered = [];
         let idx = 0, data = [];
         let recording = false, recognition = null, text = '';
-        let isInCommandPhase = false;
 
-        // --- Robust mic state machine ---
-        // recognitionActive mirrors the browser's real on/off state (set in onstart/onend).
-        // Because recognition.start()/stop() are asynchronous, we never call start()
-        // immediately after stop() — instead we queue the next action and let onend run it.
-        let recognitionActive = false;
-        let pendingAfterStop = null;   // function to run once the mic has fully stopped
-        let speechTimeout = null;
+        // --- Mic architecture ---
+        // continuous=true is intentionally NOT used: on Chrome it periodically
+        // re-transcribes a small overlap of already-heard audio, which is what
+        // caused words/sentences to repeat. Instead we run short single-utterance
+        // sessions (continuous=false) and automatically chain a new session right
+        // after each one ends, so long answers still work but every word is only
+        // ever finalized once.
+        let recognitionActive = false;     // mirrors the browser's real on/off state
+        let pendingAfterStop = null;       // callback to run once we deliberately stop the chain
+        let chainMode = null;              // 'answer' | 'command' | null
+        let sessionFinalText = '';         // this session's finalized transcript (reset each onstart)
+        let answerSegments = [];           // finalized chunks that make up the current answer
+        let forceStopTimer = null;         // ends a session early after N ms of no new speech
+        let restartTimer = null;           // brief pause before chaining into the next session
+        let commandSilentSessions = 0;     // consecutive empty command sessions before re-prompting
+
+        const ANSWER_SILENCE_MS = 3000;         // treat the answer as finished after this much silence
+        const COMMAND_SILENT_LIMIT = 2;         // re-prompt after this many empty command attempts
 
         // Initialize Speech Recognition
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -610,58 +624,32 @@
 
         if (SR) {
             recognition = new SR();
-            recognition.continuous = true;
+            recognition.continuous = false;
             recognition.interimResults = true;
             recognition.lang = 'en-IN';
 
             recognition.onstart = () => {
                 recognitionActive = true;
                 recording = true;
+                sessionFinalText = '';
 
-                if (!isInCommandPhase) {
+                if (chainMode === 'answer') {
                     document.getElementById('voiceBtn').classList.add('active');
                     document.getElementById('voiceBtn').textContent = '🎤 Listening...';
-                    document.getElementById('answerBox').classList.add('active');
-                    document.getElementById('answer').textContent = (text ? text + ' ' : '') + '🎤 Listening... (mic stays on for long answers)';
                     document.getElementById('status').classList.add('active');
                     document.getElementById('status').textContent = 'Microphone is ON - Keep speaking';
-                    armAnswerSilenceTimer();
-                }
-            };
+                    updateAnswerDisplay('');
 
-            recognition.onend = () => {
-                recognitionActive = false;
-                recording = false;
-                clearTimeout(speechTimeout);
-
-                if (!isInCommandPhase) {
-                    document.getElementById('voiceBtn').classList.remove('active');
-                    document.getElementById('voiceBtn').textContent = '🎤 Start Answering';
-                    document.getElementById('answerBox').classList.remove('active');
-                    document.getElementById('status').classList.remove('active');
-                    document.getElementById('status').textContent = '';
-                }
-
-                // Run whatever was queued to happen once the mic actually stopped.
-                if (pendingAfterStop) {
-                    const cb = pendingAfterStop;
-                    pendingAfterStop = null;
-                    cb();
-                    return;
-                }
-
-                // Default behavior: if we were recording an answer and it ended
-                // naturally (e.g. browser cut it off), move to the command phase.
-                if (!isInCommandPhase && text.trim()) {
-                    showCommandPhase();
+                    clearTimeout(forceStopTimer);
+                    forceStopTimer = setTimeout(() => {
+                        if (recognitionActive && chainMode === 'answer') recognition.stop();
+                    }, ANSWER_SILENCE_MS);
                 }
             };
 
             recognition.onresult = (e) => {
-                // With continuous=true, the browser sometimes re-sends results
-                // that were already finalized in an earlier event. Rebuilding
-                // from the full result list (not appending resultIndex-only
-                // slices) keeps this authoritative and avoids duplicated words.
+                // continuous=false means e.results only ever holds THIS session's
+                // utterance, so reading the whole list is always safe (no re-fires).
                 let finalText = '';
                 let interimText = '';
 
@@ -672,69 +660,137 @@
                         interimText += e.results[i][0].transcript;
                     }
                 }
-                finalText = finalText.trim();
+                sessionFinalText = finalText.trim();
 
-                if (isInCommandPhase) {
-                    if (finalText) {
-                        const command = finalText.toLowerCase();
-                        clearTimeout(speechTimeout);
+                if (chainMode === 'answer') {
+                    // Any activity (even interim) means the student is still talking —
+                    // push out the "give up" timer.
+                    clearTimeout(forceStopTimer);
+                    forceStopTimer = setTimeout(() => {
+                        if (recognitionActive && chainMode === 'answer') recognition.stop();
+                    }, ANSWER_SILENCE_MS);
+                    updateAnswerDisplay(interimText);
+                } else if (chainMode === 'command' && sessionFinalText) {
+                    const cmd = sessionFinalText.toLowerCase();
+                    if (cmd.includes('next') || cmd.includes('repeat') || cmd.includes('record')) {
+                        recognition.stop(); // dispatch happens in onend using sessionFinalText
+                    }
+                }
+            };
 
-                        if (command.includes('next')) {
-                            stopRecognitionThen(() => processCommand('next'));
-                        } else if (command.includes('repeat')) {
-                            stopRecognitionThen(() => processCommand('repeat'));
-                        } else if (command.includes('record')) {
-                            stopRecognitionThen(() => processCommand('record'));
+            recognition.onend = () => {
+                recognitionActive = false;
+                recording = false;
+                clearTimeout(forceStopTimer);
+
+                if (chainMode === 'answer') {
+                    document.getElementById('voiceBtn').classList.remove('active');
+                    document.getElementById('voiceBtn').textContent = '🎤 Start Answering';
+                    document.getElementById('status').classList.remove('active');
+                    document.getElementById('status').textContent = '';
+
+                    if (sessionFinalText) {
+                        // Commit this utterance exactly once, then keep listening
+                        // in case the student is still mid-answer.
+                        answerSegments.push(sessionFinalText);
+                        text = answerSegments.join(' ').trim();
+                        updateAnswerDisplay('');
+                        restartTimer = setTimeout(() => {
+                            if (chainMode === 'answer') safeStartRecognition();
+                        }, 250);
+                    } else {
+                        // A session ended with nothing new said — the student has paused/finished.
+                        document.getElementById('answerBox').classList.remove('active');
+                        chainMode = null;
+                        if (text.trim()) showCommandPhase();
+                    }
+                    return;
+                }
+
+                if (chainMode === 'command') {
+                    const cmd = sessionFinalText.toLowerCase();
+                    if (cmd.includes('next')) {
+                        chainMode = null;
+                        processCommand('next');
+                    } else if (cmd.includes('repeat')) {
+                        chainMode = null;
+                        processCommand('repeat');
+                    } else if (cmd.includes('record')) {
+                        chainMode = null;
+                        processCommand('record');
+                    } else {
+                        commandSilentSessions++;
+                        if (commandSilentSessions >= COMMAND_SILENT_LIMIT) {
+                            commandSilentSessions = 0;
+                            chainMode = null;
+                            showCommandPhase(); // re-prompt with the instructions again
                         } else {
-                            // Command not recognized — keep listening, don't restart the mic.
-                            armCommandSilenceTimer();
+                            restartTimer = setTimeout(() => {
+                                if (chainMode === 'command') safeStartRecognition();
+                            }, 250);
                         }
                     }
                     return;
                 }
 
-                // Answer recording phase - replace with the latest full transcript
-                if (finalText) {
-                    text = finalText;
-                    armAnswerSilenceTimer();
+                // chainMode is null — this was a deliberate stop (see stopChainThen).
+                if (pendingAfterStop) {
+                    const cb = pendingAfterStop;
+                    pendingAfterStop = null;
+                    cb();
                 }
-
-                const display = (text + ' ' + interimText).trim();
-                document.getElementById('answer').textContent = display || '🎤 Listening...';
             };
 
             recognition.onerror = (e) => {
                 console.error('Speech error:', e.error);
-                const msg = {
-                    'no-speech': '⚠️ No speech detected. Try again.',
-                    'network': '⚠️ Network error. Check your internet connection.',
-                    'not-allowed': '⚠️ Microphone permission denied.',
-                    'permission-denied': '⚠️ Microphone permission denied.'
-                };
-                if (!isInCommandPhase && e.error !== 'no-speech') {
+                // 'no-speech' is expected/frequent with short chained sessions — onend handles it.
+                if (chainMode === 'answer' && e.error !== 'no-speech' && e.error !== 'aborted') {
+                    const msg = {
+                        'network': '⚠️ Network error. Check your internet connection.',
+                        'not-allowed': '⚠️ Microphone permission denied.',
+                        'permission-denied': '⚠️ Microphone permission denied.'
+                    };
                     document.getElementById('answer').textContent = msg[e.error] || '⚠️ Error: ' + e.error;
                 }
             };
         }
 
-        // Restart the 3-second "student has gone quiet" timer for answer recording.
-        function armAnswerSilenceTimer() {
-            clearTimeout(speechTimeout);
-            speechTimeout = setTimeout(() => {
-                if (recognitionActive && !isInCommandPhase) {
-                    recognition.stop(); // onend -> showCommandPhase (via default behavior)
-                }
-            }, 3000);
+        function updateAnswerDisplay(interim) {
+            const combined = (answerSegments.join(' ') + ' ' + interim).trim();
+            document.getElementById('answer').textContent = combined || '🎤 Listening...';
         }
 
-        // Restart the 5-second "no command heard" timer for the command phase.
-        function armCommandSilenceTimer() {
-            clearTimeout(speechTimeout);
-            speechTimeout = setTimeout(() => {
-                if (isInCommandPhase) {
-                    stopRecognitionThen(() => showCommandPhase());
-                }
-            }, 5000);
+        // --- Answer grading (local keyword-matching, no external API needed) ---
+        // If a question has a model "Answer" in the sheet, we score the student's
+        // spoken answer by how many of the model answer's key terms are present.
+        // This is intentionally simple/transparent rather than true AI grading,
+        // since a publicly deployed static page can't safely hold an AI API key.
+        const CORRECT_THRESHOLD = 0.4; // 40% of model-answer keywords must be present to earn the mark
+        const STOPWORDS = new Set(['a','an','the','is','are','was','were','of','and','to','in','that','this',
+            'it','for','on','was','with','as','at','from','or','which','who','what','when','where','how','why',
+            'his','her','their','its','been','being','has','have','had','not','but','if','than','then','so',
+            'such','also','can','could','would','should','will','shall','may','might','into','over','under',
+            'about','after','before','during','while','because','they','them','you','your','our','we','i']);
+
+        function extractKeywords(str) {
+            return (str || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9\s]/g, ' ')
+                .split(/\s+/)
+                .filter(w => w.length > 2 && !STOPWORDS.has(w));
+        }
+
+        // Returns null if there's no model answer to grade against (question left ungraded),
+        // otherwise { isCorrect, matched, total, ratio }.
+        function gradeAnswer(modelAnswer, studentAnswer) {
+            const keywords = Array.from(new Set(extractKeywords(modelAnswer)));
+            if (keywords.length === 0) return null;
+
+            const studentWords = new Set(extractKeywords(studentAnswer));
+            const matched = keywords.filter(k => studentWords.has(k)).length;
+            const ratio = matched / keywords.length;
+
+            return { isCorrect: ratio >= CORRECT_THRESHOLD, matched, total: keywords.length, ratio };
         }
 
         // Safely start the mic. If the browser reports it's already active
@@ -745,7 +801,6 @@
                 recognition.start();
             } catch (e) {
                 console.error('Start error, retrying shortly:', e);
-                // The engine may still be tearing down the previous session — retry once.
                 setTimeout(() => {
                     if (!recognitionActive) {
                         try { recognition.start(); } catch (e2) { console.error('Retry start failed:', e2); }
@@ -754,9 +809,12 @@
             }
         }
 
-        // Stop the mic (if running) and run `callback` only once it has
-        // genuinely stopped, avoiding start()/stop() race conditions.
-        function stopRecognitionThen(callback) {
+        // Cleanly end any chained listening loop and run `callback` only once
+        // the mic has genuinely stopped — avoids start()/stop() race conditions.
+        function stopChainThen(callback) {
+            chainMode = null;
+            clearTimeout(forceStopTimer);
+            clearTimeout(restartTimer);
             if (!recognition) { callback(); return; }
             if (recognitionActive) {
                 pendingAfterStop = callback;
@@ -764,6 +822,21 @@
             } else {
                 callback();
             }
+        }
+
+        function beginAnswerCapture() {
+            text = '';
+            answerSegments = [];
+            sessionFinalText = '';
+            chainMode = 'answer';
+            updateAnswerDisplay('');
+            safeStartRecognition();
+        }
+
+        function beginCommandCapture() {
+            commandSilentSessions = 0;
+            chainMode = 'command';
+            safeStartRecognition();
         }
 
         function toggleKey() {
@@ -789,11 +862,10 @@
         function speakQuestion() {
             const q = filtered[idx].q;
             speakMessage(q, () => {
-                // Question finished — make sure any previous session is fully
-                // stopped before starting fresh, then activate the mic.
-                stopRecognitionThen(() => {
+                stopChainThen(() => {
                     document.getElementById('answer').textContent = '🎤 Requesting microphone access...';
-                    safeStartRecognition();
+                    document.getElementById('answerBox').classList.add('active');
+                    beginAnswerCapture();
                 });
             });
         }
@@ -804,58 +876,52 @@
                 return;
             }
 
-            if (recognitionActive) {
-                recognition.stop();
+            if (chainMode === 'answer') {
+                // Manual "I'm done" — end the chain and move on if we captured anything.
+                stopChainThen(() => {
+                    document.getElementById('answerBox').classList.remove('active');
+                    if (text.trim()) showCommandPhase();
+                });
             } else {
-                text = '';
-                document.getElementById('answer').textContent = '🎤 Listening...';
                 document.getElementById('answerBox').classList.add('active');
-                safeStartRecognition();
+                beginAnswerCapture();
             }
         }
 
         function clearAnswer() {
-            isInCommandPhase = false;
             document.getElementById('recordingPhase').classList.remove('hidden');
             document.getElementById('commandPhase').classList.add('hidden');
 
-            stopRecognitionThen(() => {
-                text = '';
+            stopChainThen(() => {
                 document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
                 document.getElementById('answerBox').classList.add('active');
-                speakMessage('Answer cleared. Speak now.', () => safeStartRecognition());
+                speakMessage('Answer cleared. Speak now.', () => beginAnswerCapture());
             });
         }
 
         function showCommandPhase() {
-            isInCommandPhase = true;
             document.getElementById('recordingPhase').classList.add('hidden');
             document.getElementById('commandPhase').classList.remove('hidden');
 
             const msg = 'What would you like to do? Say Next to move to the next question, Repeat to hear your answer again, or Record to record your answer again.';
-            speakMessage(msg, () => {
-                safeStartRecognition();
-                armCommandSilenceTimer();
+            stopChainThen(() => {
+                speakMessage(msg, () => beginCommandCapture());
             });
         }
 
         function processCommand(cmd) {
-            clearTimeout(speechTimeout);
-
             if (cmd === 'next') {
                 speakMessage('Your answer accepted. Moving to the next question.', () => nextQuestion());
             } else if (cmd === 'repeat') {
                 const msg = 'Your answer: ' + text;
                 speakMessage(msg, () => showCommandPhase());
             } else if (cmd === 'record') {
-                isInCommandPhase = false;
                 document.getElementById('recordingPhase').classList.remove('hidden');
                 document.getElementById('commandPhase').classList.add('hidden');
-
-                text = '';
-                document.getElementById('answer').textContent = '🎤 Listening... Speak now!';
-                document.getElementById('answerBox').classList.add('active');
-                speakMessage('Speak your answer now.', () => safeStartRecognition());
+                speakMessage('Speak your answer now.', () => {
+                    document.getElementById('answerBox').classList.add('active');
+                    beginAnswerCapture();
+                });
             }
         }
 
@@ -866,11 +932,18 @@
             }
 
             const q = filtered[idx];
-            data.push({q: q.q, ch: q.ch, a: text.trim()});
+            const grade = gradeAnswer(q.ans, text); // null if this question has no model answer to grade against
+            data.push({
+                q: q.q,
+                ch: q.ch,
+                a: text.trim(),
+                modelAnswer: q.ans || '',
+                mark: grade ? (grade.isCorrect ? 1 : 0) : null,
+                graded: !!grade
+            });
             idx++;
-            isInCommandPhase = false;
 
-            stopRecognitionThen(() => loadQuestion());
+            stopChainThen(() => loadQuestion());
         }
 
         async function setup() {
@@ -901,9 +974,10 @@
                                 if (i === 0) return;
                                 const c = r.values?.[0]?.userEnteredValue?.stringValue || '';
                                 const q = r.values?.[1]?.userEnteredValue?.stringValue || '';
+                                const ans = r.values?.[2]?.userEnteredValue?.stringValue || '';
                                 if (c && q) {
                                     ch.add(c);
-                                    questions.push({ch: c, q: q});
+                                    questions.push({ch: c, q: q, ans: ans});
                                 }
                             });
                         }
@@ -919,7 +993,8 @@
                             vals.forEach((r, i) => {
                                 if (i === 0) return;
                                 const q = r.values?.[0]?.userEnteredValue?.stringValue || '';
-                                if (q) questions.push({ch: t, q: q});
+                                const ans = r.values?.[1]?.userEnteredValue?.stringValue || '';
+                                if (q) questions.push({ch: t, q: q, ans: ans});
                             });
                         }
                     });
@@ -998,7 +1073,6 @@
             document.getElementById('answerBox').classList.remove('active');
             document.getElementById('recordingPhase').classList.remove('hidden');
             document.getElementById('commandPhase').classList.add('hidden');
-            isInCommandPhase = false;
 
             setTimeout(() => speakQuestion(), 300);
         }
@@ -1006,21 +1080,44 @@
         function submitTest() {
             document.getElementById('resultName').textContent = window.name;
             document.getElementById('resultCount').textContent = data.length;
-            
-            const msg = 'All questions completed. Saving your results.';
-            const u = new SpeechSynthesisUtterance(msg);
-            u.rate = 0.9;
-            u.onend = () => {
-                saveToSheet();
+
+            const graded = data.filter(d => d.graded);
+            const scored = graded.reduce((sum, d) => sum + d.mark, 0);
+            const totalPossible = graded.length;
+            const ungraded = data.length - graded.length;
+
+            if (totalPossible > 0) {
+                const pct = Math.round((scored / totalPossible) * 100);
+                document.getElementById('resultScore').textContent = scored + ' / ' + totalPossible + ' (' + pct + '%)';
+            } else {
+                document.getElementById('resultScore').textContent = 'Not auto-graded (no model answers set up)';
+            }
+            document.getElementById('resultScoreRow').classList.toggle('hidden', totalPossible === 0);
+            document.getElementById('resultUngradedNote').classList.toggle('hidden', ungraded === 0);
+            document.getElementById('resultUngradedNote').textContent = ungraded > 0
+                ? '📝 ' + ungraded + ' question(s) have no model answer set up, so they need manual review.'
+                : '';
+
+            let msg = 'All questions completed.';
+            if (totalPossible > 0) {
+                msg += ' You scored ' + scored + ' out of ' + totalPossible + '.';
+            }
+            msg += ' Saving your results.';
+
+            speakMessage(msg, () => {
+                saveToSheet(scored, totalPossible);
                 show('resultsScreen');
-            };
-            speechSynthesis.speak(u);
+            });
         }
 
-        async function saveToSheet() {
+        async function saveToSheet(scored, totalPossible) {
             try {
                 const ts = new Date().toLocaleString();
-                const qtext = data.map((x, i) => 'Q' + (i+1) + ': ' + x.q + '\nA: ' + x.a).join('\n---\n');
+                const qtext = data.map((x, i) => {
+                    const markLabel = x.graded ? (x.mark === 1 ? 'Correct (1 mark)' : 'Incorrect (0 marks)') : 'Not auto-graded';
+                    return 'Q' + (i + 1) + ': ' + x.q + '\nA: ' + x.a + '\nResult: ' + markLabel;
+                }).join('\n---\n');
+
                 const payload = {
                     timestamp: ts,
                     name: window.name,
@@ -1029,6 +1126,8 @@
                     count: data.length,
                     topics: topics.join(', '),
                     responses: qtext,
+                    score: scored,
+                    totalMarks: totalPossible,
                     sheetId: SHEET_ID
                 };
 

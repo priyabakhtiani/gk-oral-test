@@ -166,6 +166,104 @@
             margin: 8px 0;
         }
 
+        .review-card {
+            background: #fafafa;
+            border: 2px solid var(--border);
+            border-left: 5px solid var(--border);
+            border-radius: 10px;
+            padding: 18px 20px;
+            margin-bottom: 16px;
+            transition: all 0.2s ease;
+        }
+
+        .review-card.correct {
+            border-left-color: var(--success);
+            background: #f3fbf5;
+        }
+
+        .review-card.incorrect {
+            border-left-color: var(--danger);
+            background: #fdf5f5;
+        }
+
+        .review-card.ungraded {
+            border-left-color: var(--warning);
+            background: #fffdf5;
+        }
+
+        .review-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .review-qnum {
+            font-size: 12px;
+            font-weight: 700;
+            color: #999;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .review-badge {
+            flex-shrink: 0;
+            font-size: 12px;
+            font-weight: 700;
+            padding: 4px 12px;
+            border-radius: 20px;
+            white-space: nowrap;
+        }
+
+        .review-badge.correct {
+            background: var(--success);
+            color: white;
+        }
+
+        .review-badge.incorrect {
+            background: var(--danger);
+            color: white;
+        }
+
+        .review-badge.ungraded {
+            background: var(--warning);
+            color: #6b5200;
+        }
+
+        .review-question {
+            font-size: 16px;
+            font-weight: 600;
+            color: var(--dark);
+            line-height: 1.5;
+            margin-bottom: 10px;
+        }
+
+        .review-answer-label {
+            font-size: 12px;
+            font-weight: 700;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 4px;
+        }
+
+        .review-answer-text {
+            font-size: 15px;
+            color: #444;
+            line-height: 1.5;
+            background: white;
+            border-radius: 6px;
+            padding: 10px 14px;
+            border: 1px solid var(--border);
+        }
+
+        @media (max-width: 576px) {
+            .review-header {
+                flex-direction: column;
+            }
+        }
+
         .question-box {
             background: linear-gradient(135deg, #f0f4ff 0%, #f8f9ff 100%);
             border: 2px solid var(--primary);
@@ -585,7 +683,11 @@
                     <p id="resultMsg">📊 Saving your results...</p>
                     <p id="resultUngradedNote" class="hidden" style="font-size: 13px; color: #856404;"></p>
                 </div>
-                <button onclick="location.reload()">Take Another Test</button>
+
+                <div id="reviewSection">
+                    <label class="answer-label" style="margin-bottom: 16px; display: block;">📋 Answer Review</label>
+                    <div id="reviewList"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -1077,6 +1179,36 @@
             setTimeout(() => speakQuestion(), 300);
         }
 
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str || '';
+            return div.innerHTML;
+        }
+
+        function renderReview() {
+            const list = document.getElementById('reviewList');
+            list.innerHTML = data.map((d, i) => {
+                let statusClass = 'ungraded';
+                let badgeText = '📝 Not Graded';
+                if (d.graded) {
+                    statusClass = d.mark === 1 ? 'correct' : 'incorrect';
+                    badgeText = d.mark === 1 ? '✓ Correct · 1 mark' : '✗ Incorrect · 0 marks';
+                }
+
+                return `
+                    <div class="review-card ${statusClass}">
+                        <div class="review-header">
+                            <span class="review-qnum">Question ${i + 1} · ${escapeHtml(d.ch)}</span>
+                            <span class="review-badge ${statusClass}">${badgeText}</span>
+                        </div>
+                        <div class="review-question">${escapeHtml(d.q)}</div>
+                        <div class="review-answer-label">Student's Answer</div>
+                        <div class="review-answer-text">${escapeHtml(d.a) || '<em>No answer recorded</em>'}</div>
+                    </div>
+                `;
+            }).join('');
+        }
+
         function submitTest() {
             document.getElementById('resultName').textContent = window.name;
             document.getElementById('resultCount').textContent = data.length;
@@ -1097,6 +1229,8 @@
             document.getElementById('resultUngradedNote').textContent = ungraded > 0
                 ? '📝 ' + ungraded + ' question(s) have no model answer set up, so they need manual review.'
                 : '';
+
+            renderReview();
 
             let msg = 'All questions completed.';
             if (totalPossible > 0) {
